@@ -1,7 +1,10 @@
 import click
 
-from vpype import LineCollection, LengthType, generator, VpypeState, pass_state
+from vpype import LengthType, LineCollection, VpypeState, generator, pass_state
+
 from .cli import cli
+
+__all__ = ("frame",)
 
 
 @cli.command(group="Generators")
@@ -21,10 +24,10 @@ def frame(state: VpypeState, offset: float):
     By default, the frame shape is the current geometries' bounding box. An optional offset can
     be provided.
     """
-    if state.vector_data.is_empty():
+    if state.document.is_empty():
         return LineCollection()
 
-    bounds = state.vector_data.bounds() or (0, 0, 0, 0)
+    bounds = state.document.bounds() or (0, 0, 0, 0)
     return LineCollection(
         [
             (

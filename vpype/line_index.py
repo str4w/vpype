@@ -1,10 +1,11 @@
 import logging
-from typing import Optional, Tuple, Iterable
+from typing import Iterable, Optional, Tuple
 
 import numpy as np
 from scipy.spatial import cKDTree as KDTree
 
-__ALL__ = ["LineIndex"]
+# REMINDER: anything added here must be added to docs/api.rst
+__all__ = ["LineIndex"]
 
 
 class LineIndex:

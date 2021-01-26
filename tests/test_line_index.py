@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from vpype import LineCollection
-from vpype_cli.operations import LineIndex
+from vpype import LineCollection, LineIndex
+
 from .conftest import random_line
 
 

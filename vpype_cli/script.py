@@ -3,7 +3,10 @@ import importlib.util
 import click
 
 from vpype import LineCollection, generator
+
 from .cli import cli
+
+__all__ = ("script",)
 
 
 @cli.command(group="Input")

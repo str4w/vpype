@@ -5,7 +5,16 @@ from functools import update_wrapper
 
 import click
 
-from .layers import LayerType, VpypeState, single_to_layer_id, multiple_to_layer_ids
+from .layers import LayerType, VpypeState, multiple_to_layer_ids, single_to_layer_id
+
+# REMINDER: anything added here must be added to docs/api.rst
+__all__ = [
+    "layer_processor",
+    "global_processor",
+    "generator",
+    "block_processor",
+    "pass_state",
+]
 
 
 def _format_timedelta(dt: datetime.timedelta) -> str:
@@ -23,11 +32,34 @@ def _format_timedelta(dt: datetime.timedelta) -> str:
 
 
 def layer_processor(f):
-    """Helper decorator to define layer processor commands.
+    """Helper decorator to define a :ref:`layer processor <fundamentals_layer_processors>`
+    command.
 
-    These type of command implements intra-layer processing, which is applied to one or more
-    layers, as controlled by the --layer option. The layer processor receives a LineCollection
-    as input and must return one.
+    Layer processors implements "intra-layer" processing, i.e. they are independently called
+    for every layer in the pipeline. A ``--layer`` option is automatically appended to the
+    option to let the user control on which layer(s) the processor should be applied (by
+    default, ``all`` is used).
+
+    Layer processors receive a :py:class:`LineCollection` as input and must return one.
+
+    Example:
+
+    .. code-block:: python3
+
+        @click.command()
+        @vpype.layer_processor
+        def my_processor(lines: vpype.LineCollection) -> vpype.LineCollection:
+            '''Example layer processor'''
+
+            new_lines = vpype.LineCollection()
+
+            for line in lines:
+                # [do something with line]
+                new_lines.append(line)
+
+            return lines
+
+        my_processor.help_group = "My Plugins"
     """
 
     @click.option(
@@ -42,7 +74,7 @@ def layer_processor(f):
 
         # noinspection PyShadowingNames
         def layer_processor(state: VpypeState) -> VpypeState:
-            for lid in multiple_to_layer_ids(layers, state.vector_data):
+            for lid in multiple_to_layer_ids(layers, state.document):
                 logging.info(
                     f"executing layer processor `{f.__name__}` on layer {lid} "
                     f"(kwargs: {kwargs})"
@@ -50,7 +82,7 @@ def layer_processor(f):
 
                 start = datetime.datetime.now()
                 with state.current():
-                    state.vector_data[lid] = f(state.vector_data[lid], *args, **kwargs)
+                    state.document[lid] = f(state.document[lid], *args, **kwargs)
                 stop = datetime.datetime.now()
 
                 logging.info(
@@ -66,11 +98,46 @@ def layer_processor(f):
 
 
 def global_processor(f):
-    """Helper decorator to define "global" processor commands.
+    """Helper decorator to define a :ref:`global processor <fundamentals_global_processors>`
+    command.
 
-    These type of command implements global, multi-layer processing, for which no layer
-    facility is provided (no --layer option or processing structure). A global processor
-    receives a VectorData as input and must return one.
+    This type of command implement a global, multi-layer processing and should be used for
+    processors which cannot be applied layer-by-layer independently (in which case, using
+    a :func:`layer_processor` is advised.
+
+    No option is automatically added to global processors. In cases where the user should be
+    able to control on which layer(s) the processing must be applied, it is advised to
+    add a ``--layer`` option (with type :py:class:`LayerType`) and use the
+    :func:`multiple_to_layer_ids` companion function (see example below)
+
+    A global processor receives a :py:class:`Document` as input and must return one.
+
+    Example:
+
+    .. code-block:: python3
+
+        @click.command()
+        @click.option(
+            "-l",
+            "--layer",
+            type=vpype.LayerType(accept_multiple=True),
+            default="all",
+            help="Target layer(s).",
+        )
+        @vpype.global_processor
+        def my_global_processor(
+            document: vpype.Document, layer: Union[int, List[int]]
+        ) -> vpype.Document:
+            '''Example global processor'''
+
+            layer_ids = multiple_to_layer_ids(layer, document)
+            for lines in document.layers_from_ids(layer_ids):
+                # [apply some modification to lines]
+
+            return document
+
+
+        my_global_processor.help_group = "My Plugins"
     """
 
     def new_func(*args, **kwargs):
@@ -80,7 +147,7 @@ def global_processor(f):
 
             start = datetime.datetime.now()
             with state.current():
-                state.vector_data = f(state.vector_data, *args, **kwargs)
+                state.document = f(state.document, *args, **kwargs)
             stop = datetime.datetime.now()
 
             logging.info(
@@ -115,9 +182,8 @@ def generator(f):
 
         # noinspection PyShadowingNames
         def generator(state: VpypeState) -> VpypeState:
-
             with state.current():
-                target_layer = single_to_layer_id(layer, state.vector_data)
+                target_layer = single_to_layer_id(layer, state.document)
 
                 logging.info(
                     f"executing generator `{f.__name__}` to layer {target_layer} "
@@ -125,7 +191,7 @@ def generator(f):
                 )
 
                 start = datetime.datetime.now()
-                state.vector_data.add(f(*args, **kwargs), target_layer)
+                state.document.add(f(*args, **kwargs), target_layer)
                 stop = datetime.datetime.now()
 
             state.target_layer = target_layer
@@ -143,9 +209,7 @@ def generator(f):
 
 
 def block_processor(c):
-    """
-    Create an instance of the block layer_processor class
-    """
+    """Create an instance of the block processor class."""
 
     def new_func(*args, **kwargs):
         return c(*args, **kwargs)
@@ -154,8 +218,7 @@ def block_processor(c):
 
 
 def pass_state(f):
-    """Marks a command as wanting to receive the current state.
-    """
+    """Marks a command as wanting to receive the current state."""
 
     def new_func(*args, **kwargs):
         return f(VpypeState.get_current(), *args, **kwargs)

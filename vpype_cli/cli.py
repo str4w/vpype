@@ -2,16 +2,18 @@ import logging
 import os
 import random
 import shlex
-from typing import TextIO, List, Union, Any
+from typing import Any, List, Optional, TextIO, Union
 
 import click
+import numpy as np
 from click import get_os_args
 from click_plugins import with_plugins
-import numpy as np
 from pkg_resources import iter_entry_points
 from shapely.geometry import MultiLineString
 
-from vpype import VpypeState
+import vpype as vp
+
+__all__ = ("cli", "execute", "begin", "end")
 
 
 class GroupedGroup(click.Group):
@@ -72,9 +74,10 @@ class GroupedGroup(click.Group):
         return super().main(args=preprocess_argument_list(args), **extra)
 
 
-# noinspection PyUnusedLocal
+# noinspection PyUnusedLocal,PyUnresolvedReferences
 @with_plugins(iter_entry_points("vpype.plugins"))
 @click.group(cls=GroupedGroup, chain=True)
+@click.version_option(version=vp.__version__, message="%(prog)s %(version)s")
 @click.option("-v", "--verbose", count=True)
 @click.option("-I", "--include", type=click.Path(), help="Load commands from a command file.")
 @click.option(
@@ -84,8 +87,13 @@ class GroupedGroup(click.Group):
     help="Record this command in a `vpype_history.txt` in the current directory.",
 )
 @click.option("-s", "--seed", type=int, help="Specify the RNG seed.")
+@click.option(
+    "-c", "--config", type=click.Path(exists=True), help="Load an additional config file."
+)
 @click.pass_context
-def cli(ctx, verbose, include, history, seed):
+def cli(ctx, verbose, include, history, seed, config):
+    """Execute the vector processing pipeline passed as argument."""
+
     logging.basicConfig()
     if verbose == 0:
         logging.getLogger().setLevel(logging.WARNING)
@@ -110,16 +118,19 @@ def cli(ctx, verbose, include, history, seed):
     np.random.seed(seed)
     random.seed(seed)
 
+    if config is not None:
+        vp.CONFIG_MANAGER.load_config_file(config)
+
 
 # noinspection PyShadowingNames,PyUnusedLocal
 @cli.resultcallback()
-def process_pipeline(processors, verbose, include, history, seed):
+def process_pipeline(processors, verbose, include, history, seed, config):
     execute_processors(processors)
 
 
-def execute_processors(processors) -> VpypeState:
+def execute_processors(processors) -> vp.VpypeState:
     """
-    Execute a sequence of processors to generate a VectorData structure. For block handling, we
+    Execute a sequence of processors to generate a Document structure. For block handling, we
     use a recursive approach. Only top-level blocks are extracted and processed by block
     processors, which, in turn, recursively call this function.
     :param processors: iterable of processors
@@ -163,7 +174,7 @@ def execute_processors(processors) -> VpypeState:
 
             if nested_count == 0:
                 # we're closing a top level block, let's process it
-                block_vector_data = block.process(top_level_processors)  # type: ignore
+                block_document = block.process(top_level_processors)  # type: ignore
 
                 # Create a placeholder layer_processor that will add the block's result to the
                 # current frame. The placeholder_processor is a closure, so we need to make
@@ -171,14 +182,14 @@ def execute_processors(processors) -> VpypeState:
                 # to the block_vd variable above, which might be overwritten by a subsequent
                 # top-level block
                 # noinspection PyShadowingNames
-                def build_placeholder_processor(block_vector_data):
+                def build_placeholder_processor(block_document):
                     def placeholder_processor(input_state):
-                        input_state.vector_data.extend(block_vector_data)
+                        input_state.document.extend(block_document)
                         return input_state
 
                     return placeholder_processor
 
-                outer_processors.append(build_placeholder_processor(block_vector_data))
+                outer_processors.append(build_placeholder_processor(block_document))
 
                 # reset the top level layer_processor list
                 top_level_processors = list()
@@ -196,7 +207,7 @@ def execute_processors(processors) -> VpypeState:
         raise click.ClickException("An 'end' command is missing")
 
     # the (only) frame's processors should now be flat and can be chain-called
-    state = VpypeState()
+    state = vp.VpypeState()
     for proc in outer_processors:
         state = proc(state)
     return state
@@ -208,10 +219,12 @@ class BeginBlock:
 
 @cli.command(group="Block control")
 def begin():
-    """
-    Mark the start of a block. It must be followed by a block layer_processor command (eg.
-    `grid` or `repeat`), which indicates how the block is processed. Blocks must be ended by a
-    `end` command and can be nested.
+    """Marks the start of a block.
+
+    A `begin` command must be followed by a block processor command (eg. `grid` or `repeat`),
+    which indicates how the block is processed. Blocks must be ended by a `end` command.
+
+    Blocks can be nested.
     """
     return BeginBlock()
 
@@ -222,9 +235,7 @@ class EndBlock:
 
 @cli.command(group="Block control")
 def end():
-    """
-    Mark the end of a block.
-    """
+    """Marks the end of a block."""
     return EndBlock()
 
 
@@ -255,11 +266,7 @@ def extract_arguments(f: TextIO) -> List[str]:
     """
     args = []
     for line in f.readlines():
-        idx = line.find("#")
-        if idx != -1:
-            line = line[:idx]
-
-        args.extend(shlex.split(line))
+        args.extend(shlex.split(line, comments=True))
     return args
 
 
@@ -301,3 +308,56 @@ def preprocess_argument_list(args: List[str], cwd: Union[str, None] = None) -> L
             result.append(arg)
 
     return result
+
+
+def execute(pipeline: str, document: Optional[vp.Document] = None) -> vp.Document:
+    """Execute a vpype pipeline.
+
+    This function serves as a Python API to vpype's pipeline. It can be used from a regular
+    Python script (as opposed to the ``vpype`` CLI which must be used from a console or via
+    :func:`os.system`.
+
+    If a :class:`vpype.Document` instance is provided, it will be preloaded in the pipeline
+    before the first command executes. The pipeline's content after the last command is
+    returned as a :class:`vpype.Document` instance.
+
+    Examples:
+
+        Read a SVG file, optimize it and return the result as a :class:`vpype.Document`
+        instance::
+
+            >>> doc = execute("read input.svg linemerge linesimplify linesort")
+
+        Optimize and save a :class:`vpype.Document` instance::
+
+            >>> doc = vp.Document()
+            >>> # populate `doc` with some graphics
+            >>> execute("linemerge linesimplify linesort write output.svg", doc)
+
+    Args:
+        pipeline: vpype pipeline as would be used with ``vpype`` CLI
+        document: if provided, is perloaded in the pipeline before the first command executes
+
+    Returns:
+        pipeline's content after the last command executes
+    """
+
+    if document:
+
+        @cli.command()
+        @vp.global_processor
+        def vsketchinput(doc):
+            doc.extend(document)
+            return doc
+
+    out_doc = vp.Document()
+
+    @cli.command()
+    @vp.global_processor
+    def vsketchoutput(doc):
+        out_doc.extend(doc)
+        return doc
+
+    args = ("vsketchinput " if document else "") + pipeline + " vsketchoutput"
+    cli.main(prog_name="vpype", args=shlex.split(args), standalone_mode=False)
+    return out_doc

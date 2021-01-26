@@ -1,11 +1,27 @@
-"""Miscellaneous geometry functions on polylines expressed as numpy array of complex."""
-
 import math
 from typing import List, Optional
 
 import numpy as np
 
-__all__ = ["interpolate", "crop_half_plane", "crop", "reloop"]
+__all__ = ["line_length", "is_closed", "interpolate", "crop_half_plane", "crop", "reloop"]
+
+
+def line_length(line: np.ndarray) -> float:
+    """Compute the length of a line."""
+    return float(np.sum(np.abs(np.diff(line))))
+
+
+def is_closed(line: np.ndarray, tolerance: float) -> bool:
+    """Check if a line is closed.
+
+    Args:
+        line: the line to test
+        tolerance: max distance between starting and ending point to consider a path is_closed
+
+    Returns:
+        True if line is is_closed
+    """
+    return len(line) > 1 and np.abs(line[-1] - line[0]) <= tolerance
 
 
 def interpolate(line: np.ndarray, step: float) -> np.ndarray:
@@ -99,7 +115,7 @@ def crop_half_plane(
     for start, stop in zip(start_idx, stop_idx):
         if start == -1:
             sub_line = np.hstack(
-                [line[: stop + 1], _interpolate_crop(line[stop], line[stop + 1], loc, axis),]
+                [line[: stop + 1], _interpolate_crop(line[stop], line[stop + 1], loc, axis)]
             )
         elif stop == inf:
             sub_line = np.hstack(
@@ -137,8 +153,10 @@ def crop(line: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> List[n
     """Crop a polyline to a rectangular area.
 
     Args:
-        x1, y1: bottom-left corner of the crop area
-        x2, y2: top-right corner of the crop area
+        x1: left coordinate of the crop area
+        y1: bottom coordinate of the crop area
+        x2: right coordinate of the crop area
+        y2: top coordinate of the crop area
 
     Returns:
         list of lines resulting of the crop (emtpy if x1 > x2 or y1 > y2)
